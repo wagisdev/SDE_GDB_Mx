@@ -7,9 +7,9 @@
 #
 # Author:      John Spence, Spatial Data Administrator, City of Bellevue
 #
-# Created:
-# Modified:
-# Modification Purpose:
+# Created:     24 December 2018
+# Modified:    11 November 2019
+# Modification Purpose:  Added in e-mail and additional functions.
 #
 #-------------------------------------------------------------------------------
 
@@ -26,20 +26,27 @@
 # 888888888888888888888888888888888888888888888888888888888888888888888888888888
 
 # Configure only hard coded db connection here.
-db_connection = r'Database Connections\\Connection to Carta on COBSSDB16TS18B.sde'
+db_connection = r'Database Connections\\YourDatabase.sde'
 
 # Targeted Dbase Server.
-db_table = '[ADMINGTS].[View_Master_Layer_Table_History]'
+db_table = '[ADMINGTS].[View_Layer_Table_History]'
 
 # Configure database update type here. (Prod, Stg, Test, Other)
-db_type = 'Test'
+db_type = 'STG'
+
+# Send confirmation of rebuild to
+email_target = 'your@email.com'
+
+# Configure the e-mail server and other info here.
+mail_server = 'smtprelay.yours.com'
+mail_from = 'DB Maintenance<noreply@yours.com>'
 
 # ------------------------------------------------------------------------------
 # DO NOT UPDATE BELOW THIS LINE OR RISK DOOM AND DISPAIR!  Have a nice day!
 # ------------------------------------------------------------------------------
 
 # Import Python libraries
-import arcpy
+import arcpy, smtplib, os, datetime
 
 #-------------------------------------------------------------------------------
 #
@@ -51,18 +58,18 @@ import arcpy
 
 # Def for determining what database our connection is tied to.
 def set_current_database(db_connection):
-    print "Entering Set Current Database----"
+    ##print ("Entering Set Current Database----")
     global current_db
     check_db_sql = '''SELECT DB_NAME() AS [Database]'''
     check_db_return = arcpy.ArcSDESQLExecute(db_connection).execute(check_db_sql)
     current_db = check_db_return
-    print "Current Database:  " + current_db
-    print "----Leaving Set Current Database"
+    print ("Current Database:  " + current_db)
+    ##print ("----Leaving Set Current Database")
     return current_db
 
 
 def check_FC_count (db_connection, db_table):
-    print 'Entering Database Check Feature Class Count----'
+    ##print ('Entering Database Check Feature Class Count----')
 
     # Define global variable to carry through application.
     global mx_count
@@ -75,8 +82,8 @@ def check_FC_count (db_connection, db_table):
     check_FC_count_return = int(arcpy.ArcSDESQLExecute(db_connection).execute(check_FC_count_sql))
     mx_count = check_FC_count_return
 
-    print'Processing {0} feature classes.'.format(mx_count)
-    print '----Exiting Database Check Feature Class Count'
+    print ('Processing {0} feature classes.'.format(mx_count))
+    ##print ('----Exiting Database Check Feature Class Count')
 
 
     return mx_count
@@ -85,7 +92,7 @@ def check_FC_count (db_connection, db_table):
 #  Obtain database connection used for maintenance.
 def obtain_dbase_connection(db_connection, target_db, target_db_type, fc_update_owner):
 
-    print "Entering Obtain Database Connection----"
+    ##print ("Entering Obtain Database Connection----")
     # Define Global Variable
     global conn_string
 
@@ -95,55 +102,60 @@ def obtain_dbase_connection(db_connection, target_db, target_db_type, fc_update_
     fc_update_owner_sql = "'" + fc_update_owner + "'"
 
     # Pull from Dbase exact connection string needed.
-    db_connection_stringSQL = '''select * from admingts.SDE_Connections where SourceDB = {0} and SourceDB_Type = {1} and Data_Owner = {2}'''.format(target_db_sql, db_type_sql, fc_update_owner_sql)
-    db_connection_stringReturn = arcpy.ArcSDESQLExecute(db_connection).execute(db_connection_stringSQL)
-    for row in db_connection_stringReturn:
-        conn_string = row [4]
+    try:
+        db_connection_stringSQL = '''select * from admingts.SDE_Connections where SourceDB = {0} and SourceDB_Type = {1} and Data_Owner = {2}'''.format(target_db_sql, db_type_sql, fc_update_owner_sql)
+        db_connection_stringReturn = arcpy.ArcSDESQLExecute(db_connection).execute(db_connection_stringSQL)
+        for row in db_connection_stringReturn:
+            conn_string = row [4]
 
-        print "Database connection = {0} \n".format(conn_string)
-        print "----Leaving Obtain Database Connection"
-        return conn_string
+            print ("     Database connection = {0} \n".format(conn_string))
+    except:
+            print ("     No Connection for:  {0}.".format(fc_update_owner))
+
+
+    ##print ("----Leaving Obtain Database Connection")
+    return conn_string
 
 
 # Used to recalculate the extents.
 def recalc_extents(conn_string, fc_target_fullnamewdb):
 
-    print "Entering Recalcaulte Extents----"
-    print "Targeting:  {0}".format(fc_target_fullnamewdb)
+    ##print ("Entering Recalcaulte Extents----")
+    print ("     Calculating Extent:  {0}".format(fc_target_fullnamewdb))
 
     output_connection = conn_string + '\\' + fc_target_fullnamewdb
     try:
         arcpy.RecalculateFeatureClassExtent_management(output_connection)
-        print "Status:  Success!"
-    except Exception as error:
-        print "Status:  Failure!"
-        print(error.args[0])
+        print ("     --Status:  Success!\n")
+    except Exception as error_extents:
+        print ("     --Status:  Failure!\n")
+        print(error_extents.args[0])
 
-    print "----Leaving Recalcaulte Extents"
+    ##print ("----Leaving Recalcaulte Extents")
     return
 
 # Used to recalculate the indexes.  Not really required for MS SQL as the spatial extent is auto calculated.
 def recalc_indexes(conn_string, fc_target_fullnamewdb):
 
-    print "Entering Recalcaulte Indexes----"
-    print "Targeting:  {0}".format(fc_target_fullnamewdb)
+    ##print ("Entering Recalcaulte Indexes----")
+    print ("     Indexing:  {0}".format(fc_target_fullnamewdb))
 
     try:
         arcpy.RebuildIndexes_management(conn_string, "NO_SYSTEM",fc_target_fullnamewdb, "ALL")
-        print "Status:  Success!"
-    except Exception as err:
-        print "Status:  Failure!"
-        print(error.args[0])
+        print ("     --Status:  Success!\n")
+    except Exception as error_indexes:
+        print ("     --Status:  Failure!\n")
+        print(error_indexes.args[0])
 
-    print "----Leaving Recalcaulte Indexes"
+    ##print ("----Leaving Recalcaulte Indexes")
 
     return
 
 # Used to update statistics on the FC.
 def analyze_fc(conn_string, fc_target_fullnamewdb):
 
-    print "Entering Analyze Feature Class----"
-    print "Targeting:  {0}".format(fc_target_fullnamewdb)
+    ##print ("Entering Analyze Feature Class----")
+    print ("     Analyze:  {0}".format(fc_target_fullnamewdb))
 
     try:
         arcpy.AnalyzeDatasets_management(conn_string,
@@ -152,25 +164,50 @@ def analyze_fc(conn_string, fc_target_fullnamewdb):
                                      "ANALYZE_BASE",
                                      "ANALYZE_DELTA",
                                      "ANALYZE_ARCHIVE")
-        print "Status:  Success!"
-    except Exception as error:
-        print "Status:  Failure!"
-        print(error.args[0])
+        print ("     --Status:  Success!\n")
+    except Exception as error_analyze:
+        print ("     --Status:  Failure!\n")
+        print(error_analyze.args[0])
 
-    print "----Leaving Analyze Feature Class"
+    ##print ("----Leaving Analyze Feature Class")
 
     return
 
 # Main MX routine def that uses extents, indexes and analyze to update each FC one at a time.
 def perform_mx_routine(conn_string, fc_target_fullnamewdb):
 
+    print ("Started:  {0}\n".format (datetime.datetime.now()))
     recalc_extents(conn_string, fc_target_fullnamewdb)
+    analyze_fc(conn_string, fc_target_fullnamewdb)
     recalc_indexes(conn_string, fc_target_fullnamewdb)
     analyze_fc(conn_string, fc_target_fullnamewdb)
+    print ("Completed:  {0}".format (datetime.datetime.now()))
 
     return
 
+def sendcompletetion(email_target, mail_server, mail_from, current_db, message_body, startDT, finishDT):
+    mail_priority = '5'
+    mail_subject = '{0}:  Maintenance Process Completed'.format(current_db)
+    mail_msg = 'Maintenance process has completed for {0}.  {1}\nTask Start: {2}\nTask End: {3}\n\n[SYSTEM AUTO GENERATED MESSAGE]'.format(current_db, message_body, startDT, finishDT)
 
+    # Set SMTP Server and configuration of message.
+    server = smtplib.SMTP(mail_server)
+    email_target = email_target
+    mail_priority = mail_priority
+    mail_subject =  mail_subject
+    mail_msg =  mail_msg
+
+    send_mail = 'To: {0}\nFrom: {1}\nX-Priority: {2}\nSubject: {3}\n\n{4}'.format(email_target, mail_from, mail_priority, mail_subject, mail_msg)
+    # Double commented out code hides how to send a BCC as well.
+    ##send_mail = 'To: {0}\nFrom: {1}\nBCC: {2}\nX-Priority: {3}\nSubject: {4}\n\n{5}'.format(email_target, mail_from, mail_bcc, mail_priority, mail_subject, mail_msg)
+
+    server.sendmail(mail_from, email_target, send_mail)
+    # Double commented out code hides how to send a BCC as well.
+    ##server.sendmail(mail_from, [email_target, mail_bcc], send_mail)
+
+    server.quit()
+
+    return
 
 #-------------------------------------------------------------------------------
 #
@@ -179,6 +216,9 @@ def perform_mx_routine(conn_string, fc_target_fullnamewdb):
 #
 #
 #-------------------------------------------------------------------------------
+
+# Get starting date/time
+startDT = datetime.datetime.now()
 
 # Determine which database we are working in.
 set_current_database(db_connection)
@@ -189,6 +229,9 @@ check_FC_count(db_connection,db_table)
 # Begin Rolling through layers for MX.  At end of count, script terminates.
 if mx_count > 0:
 
+# Set Zero count
+    completed_mx = 0
+
 # Run query selecting FC Owner and FC for tageted MX needs.
     db_table_sql = db_table
     fc_type_sql = "'" + 'Feature Class' + "'"
@@ -198,7 +241,7 @@ if mx_count > 0:
         fc_target_schema = row[0]
         fc_taret_tablename = row[1]
 
-        print '/n/n-----------------------------------------------------'
+        print '\n\n-----------------------------------------------------'
         print 'Current Database:  {0}'.format(current_db)
         print 'FC Targeted Schema:  {0}'.format(fc_target_schema)
         print 'FC Targeted for MX:  {0}.{1}'.format(fc_target_schema, fc_taret_tablename)
@@ -220,11 +263,19 @@ if mx_count > 0:
 
         # Send off to MX
         perform_mx_routine(conn_string, fc_target_fullnamewdb)
+        completed_mx += 1
 
-    print "Maintenance Complete.  Please review error log."
+        print ("\n\nCompleted {0} of {1} available!\n\n".format (completed_mx, mx_count))
+
+    # Get finish date/time
+    finishDT = datetime.datetime.now()
+    print ("Maintenance Complete.  Please review error log.")
+    message_body = 'Please review error log when capable.'
+    sendcompletetion(email_target, mail_server, mail_from, current_db, message_body, startDT, finishDT)
 
 else:
     print "No SDE data in database.  No MX can be performed at this time."
+
 
 
 
